@@ -60,6 +60,24 @@ export const toolInputSchemas = {
       .describe("Export scale for raster formats (default 2). Higher values give sharper images."),
   }),
 
+  get_node_images: z.object({
+    nodeIds: z
+      .array(figmaNodeId)
+      .optional()
+      .describe(
+        "Optional node IDs to scan recursively for original image fills. If omitted, scans the current selection.",
+      ),
+  }),
+
+  get_node_css: z.object({
+    nodeIds: z
+      .array(figmaNodeId)
+      .min(1)
+      .describe(
+        "Node IDs to inspect with Figma's native getCSSAsync() output.",
+      ),
+  }),
+
   save_screenshots: z.object({
     items: z
       .array(
@@ -108,6 +126,8 @@ const rpcToArgs: Record<
   get_design_context: (nodeIds, params) => ({ nodeIds, ...params }),
   get_nodes: (nodeIds) => ({ nodeIds }),
   get_screenshot: (nodeIds, params) => ({ nodeIds, ...params }),
+  get_node_images: (nodeIds) => ({ nodeIds }),
+  get_node_css: (nodeIds) => ({ nodeIds }),
   save_screenshots: (_nodeIds, params) => ({ ...params }),
 };
 

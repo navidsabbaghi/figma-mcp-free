@@ -288,6 +288,24 @@ must be followed for every Figma-driven change.
   );
 
   server.tool(
+    "get_node_images",
+    "Extract all original raw uploaded raster images (JPEG/PNG) from fills inside the target node(s) without rendering or downscaling. Returns image dimensions, hashes, and base64 payloads.",
+    toolInputSchemas.get_node_images.shape,
+    async ({ nodeIds }): Promise<ToolResult> => {
+      return renderResponse(() => node.sendWithParams("get_node_images", nodeIds));
+    }
+  );
+
+  server.tool(
+    "get_node_css",
+    "Get native CSS declarations directly from Figma's inspect engine (getCSSAsync) for target nodes, including exact flexbox layout, padding, shadows, border-radii, and typography.",
+    toolInputSchemas.get_node_css.shape,
+    async ({ nodeIds }): Promise<ToolResult> => {
+      return renderResponse(() => node.sendWithParams("get_node_css", nodeIds));
+    }
+  );
+
+  server.tool(
     "save_screenshots",
     "Export screenshots for multiple nodes and save them directly to the local filesystem. Returns metadata only (no base64).",
     toolInputSchemas.save_screenshots.shape,

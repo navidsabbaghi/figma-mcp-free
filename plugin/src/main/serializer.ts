@@ -163,8 +163,9 @@ const getBounds = (node: SceneNode): SerializedBounds | undefined => {
  * Map Figma font style string to a CSS-standard font weight value.
  * Figma stores weight in the style string (e.g. "Bold", "Semi Bold", "Medium Italic").
  */
-const mapFontWeight = (style: string): string => {
-  const s = style.toLowerCase();
+const mapFontWeight = (style: string | undefined): string => {
+  if (!style) return "400";
+  const s = String(style).toLowerCase();
   if (s.includes("thin") || s.includes("hairline")) return "100";
   if (s.includes("extralight") || s.includes("ultra light") || s.includes("extra light")) return "200";
   if (s.includes("light")) return "300";
@@ -177,8 +178,9 @@ const mapFontWeight = (style: string): string => {
   return "400";
 };
 
-const mapFontStyle = (style: string): string | undefined => {
-  const s = style.toLowerCase();
+const mapFontStyle = (style: string | undefined): string | undefined => {
+  if (!style) return undefined;
+  const s = String(style).toLowerCase();
   if (s.includes("italic")) return "italic";
   if (s.includes("oblique")) return "oblique";
   return undefined;
@@ -192,7 +194,7 @@ const serializeTextStyle = (node: TextNode): SerializedTextStyle => {
     style.fontFamily = "mixed";
     style.fontWeight = "mixed";
   } else if (node.fontName) {
-    style.fontFamily = node.fontName.family;
+    style.fontFamily = node.fontName.family ?? "sans-serif";
     style.fontWeight = mapFontWeight(node.fontName.style);
     const fontStyle = mapFontStyle(node.fontName.style);
     if (fontStyle) style.fontStyle = fontStyle;
@@ -330,11 +332,11 @@ const serializeTextSegments = (node: TextNode): SerializedTextSegment[] | undefi
 
     const chars = node.characters.slice(i, j);
     const style: SerializedTextStyle = {
-      fontFamily: startFont.family,
-      fontWeight: mapFontWeight(startFont.style),
+      fontFamily: startFont?.family ?? "sans-serif",
+      fontWeight: mapFontWeight(startFont?.style),
       fontSize: startSize,
     };
-    const fs = mapFontStyle(startFont.style);
+    const fs = mapFontStyle(startFont?.style);
     if (fs) style.fontStyle = fs;
 
     // Line height for this segment
@@ -554,7 +556,7 @@ const serializeStyles = (node: SceneNode) => {
   return styles;
 };
 
-export const serializeNode = (node: SceneNode): SerializedNode => {
+export const serializeNode = (node: SceneNode, componentInfo?: { id: string; name: string }): SerializedNode => {
   // Skip invisible nodes
   const visible = "visible" in node ? node.visible : true;
 
@@ -609,10 +611,9 @@ export const serializeNode = (node: SceneNode): SerializedNode => {
         ])
       );
     }
-    const mainComp = inst.mainComponent;
-    if (mainComp) {
-      base.componentId = mainComp.id;
-      base.componentName = mainComp.name;
+    if (componentInfo) {
+      base.componentId = componentInfo.id;
+      base.componentName = componentInfo.name;
     }
   }
 

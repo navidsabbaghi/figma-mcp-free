@@ -9,7 +9,9 @@ type RequestType =
   | "get_metadata"
   | "get_design_context"
   | "get_variable_defs"
-  | "get_screenshot";
+  | "get_screenshot"
+  | "get_node_images"
+  | "get_node_css";
 
 type ServerRequest = {
   type: RequestType;
@@ -71,12 +73,25 @@ const handleRequest = async (
           requestId: request.requestId,
           data: serializeNode(figma.currentPage as unknown as SceneNode),
         };
-      case "get_selection":
+      case "get_selection": {
+        const selectionData = await Promise.all(
+          figma.currentPage.selection.map(async (node) => {
+            let componentInfo: { id: string; name: string } | undefined;
+            if (node.type === "INSTANCE") {
+              const mainComponent = await node.getMainComponentAsync();
+              if (mainComponent) {
+                componentInfo = { id: mainComponent.id, name: mainComponent.name };
+              }
+            }
+            return serializeNode(node, componentInfo);
+          })
+        );
         return {
           type: request.type,
           requestId: request.requestId,
-          data: figma.currentPage.selection.map((node) => serializeNode(node)),
+          data: selectionData,
         };
+      }
       case "get_node": {
         const nodeId = request.nodeIds && request.nodeIds[0];
         if (!nodeId) {
@@ -101,8 +116,9 @@ const handleRequest = async (
             figma.getLocalGridStylesAsync(),
           ]);
 
-        const mapFontWeight = (style: string): string => {
-          const s = style.toLowerCase();
+        const mapFontWeight = (style: string | undefined): string => {
+          if (!style) return "400";
+          const s = String(style).toLowerCase();
           if (s.includes("thin") || s.includes("hairline")) return "100";
           if (s.includes("extralight") || s.includes("ultra light") || s.includes("extra light")) return "200";
           if (s.includes("light")) return "300";
@@ -127,20 +143,21 @@ const handleRequest = async (
             text: textStyles.map((style) => {
               const lh = style.lineHeight as LineHeight;
               let lineHeight: string | undefined;
-              if (lh.unit === "PIXELS") lineHeight = `${lh.value}px`;
-              else if (lh.unit === "PERCENT") lineHeight = `${Math.round(lh.value)}%`;
+              if (lh && lh.unit === "PIXELS") lineHeight = `${lh.value}px`;
+              else if (lh && lh.unit === "PERCENT") lineHeight = `${Math.round(lh.value)}%`;
 
               const ls = style.letterSpacing as LetterSpacing;
               let letterSpacing: string | undefined;
-              if (ls.unit === "PIXELS" && ls.value !== 0) letterSpacing = `${ls.value}px`;
-              else if (ls.unit === "PERCENT" && ls.value !== 0) letterSpacing = `${ls.value}%`;
+              if (ls && ls.unit === "PIXELS" && ls.value !== 0) letterSpacing = `${ls.value}px`;
+              else if (ls && ls.unit === "PERCENT" && ls.value !== 0) letterSpacing = `${ls.value}%`;
 
+              const fontStyleStr = style.fontName?.style ? String(style.fontName.style).toLowerCase() : "";
               return {
                 id: style.id,
                 name: style.name,
-                fontFamily: style.fontName.family,
-                fontWeight: mapFontWeight(style.fontName.style),
-                fontStyle: style.fontName.style.toLowerCase().includes("italic") ? "italic" : undefined,
+                fontFamily: style.fontName?.family ?? "sans-serif",
+                fontWeight: mapFontWeight(style.fontName?.style),
+                fontStyle: fontStyleStr.includes("italic") ? "italic" : undefined,
                 fontSize: style.fontSize,
                 lineHeight,
                 letterSpacing,
@@ -196,9 +213,22 @@ const handleRequest = async (
         };
 
         const metadataDepth = request.params?.depth ?? 3;
-        const nodes = selection.length > 0
-          ? selection.map((n) => serializeMetadataNode(n, metadataDepth))
-          : [serializeMetadataNode(figma.currentPage, metadataDepth)];
+        let metadataTargets: Array<SceneNode | PageNode>;
+        if (request.nodeIds && request.nodeIds.length > 0) {
+          const resolved = await Promise.all(
+            request.nodeIds.map((id) => figma.getNodeByIdAsync(id))
+          );
+          metadataTargets = resolved.filter(
+            (node): node is SceneNode | PageNode => node !== null && node.type !== "DOCUMENT"
+          );
+        } else {
+          metadataTargets = selection.length > 0
+            ? [...selection]
+            : [figma.currentPage];
+        }
+        const nodes = metadataTargets.map((node) =>
+          serializeMetadataNode(node, metadataDepth)
+        );
 
         return {
           type: request.type,
@@ -439,6 +469,128 @@ const handleRequest = async (
           requestId: request.requestId,
           data: {
             exports,
+          },
+        };
+      }
+      case "get_node_images": {
+        let targets: SceneNode[] = [];
+        if (request.nodeIds && request.nodeIds.length > 0) {
+          const resolved = await Promise.all(
+            request.nodeIds.map((id) => figma.getNodeByIdAsync(id))
+          );
+          targets = resolved.filter(
+            (node): node is SceneNode =>
+              node !== null && node.type !== "DOCUMENT" && node.type !== "PAGE"
+          );
+        } else {
+          targets = [...figma.currentPage.selection];
+        }
+
+        if (targets.length === 0) {
+          targets = [figma.currentPage as unknown as SceneNode];
+        }
+
+        const foundImages: Array<{
+          nodeId: string;
+          nodeName: string;
+          imageHash: string;
+          width: number;
+          height: number;
+          base64: string;
+        }> = [];
+
+        const seenHashes = new Set<string>();
+
+        const collectImages = async (node: SceneNode) => {
+          if ("fills" in node && Array.isArray((node as any).fills)) {
+            for (const paint of (node as any).fills as readonly Paint[]) {
+              if (paint.type === "IMAGE" && paint.imageHash && !seenHashes.has(paint.imageHash)) {
+                seenHashes.add(paint.imageHash);
+                const imageObj = figma.getImageByHash(paint.imageHash);
+                if (imageObj) {
+                  try {
+                    const [bytes, size] = await Promise.all([
+                      imageObj.getBytesAsync(),
+                      imageObj.getSizeAsync(),
+                    ]);
+                    foundImages.push({
+                      nodeId: node.id,
+                      nodeName: node.name,
+                      imageHash: paint.imageHash,
+                      width: size.width,
+                      height: size.height,
+                      base64: figma.base64Encode(bytes),
+                    });
+                  } catch (e) {
+                    // Ignore corrupted or unresolvable image bytes
+                  }
+                }
+              }
+            }
+          }
+
+          if ("children" in node && Array.isArray((node as any).children)) {
+            for (const child of (node as any).children) {
+              await collectImages(child as SceneNode);
+            }
+          }
+        };
+
+        for (const target of targets) {
+          await collectImages(target);
+        }
+
+        return {
+          type: request.type,
+          requestId: request.requestId,
+          data: {
+            count: foundImages.length,
+            images: foundImages,
+          },
+        };
+      }
+      case "get_node_css": {
+        let targets: SceneNode[] = [];
+        if (request.nodeIds && request.nodeIds.length > 0) {
+          const resolved = await Promise.all(
+            request.nodeIds.map((id) => figma.getNodeByIdAsync(id))
+          );
+          targets = resolved.filter(
+            (node): node is SceneNode =>
+              node !== null && node.type !== "DOCUMENT" && node.type !== "PAGE"
+          );
+        } else {
+          targets = [...figma.currentPage.selection];
+        }
+
+        if (targets.length === 0) {
+          throw new Error("No nodes selected or provided for get_node_css");
+        }
+
+        const cssResults = await Promise.all(
+          targets.map(async (node) => {
+            let css: Record<string, string> = {};
+            if ("getCSSAsync" in node && typeof (node as any).getCSSAsync === "function") {
+              try {
+                css = await (node as any).getCSSAsync();
+              } catch (e) {
+                // Ignore if getCSSAsync fails on particular node
+              }
+            }
+            return {
+              nodeId: node.id,
+              nodeName: node.name,
+              nodeType: node.type,
+              css,
+            };
+          })
+        );
+
+        return {
+          type: request.type,
+          requestId: request.requestId,
+          data: {
+            nodes: cssResults,
           },
         };
       }
